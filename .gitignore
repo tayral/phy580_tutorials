@@ -1,0 +1,13 @@
+# /
+/build
+
+
+# /tests/
+/tests/.deps
+/tests/report
+/tests/*.aqasm
+/tests/*.aqasm.circ
+
+**/*.pyc
+**/*.pyo
+**/.ipynb_checkpoints/*
