@@ -3,10 +3,11 @@ import numpy as np
 from itertools import product
 from copy import deepcopy
 
-from qat.core.plugins import AbstractPlugin
 from qat.comm.datamodel.ttypes import OpType
 from qat.comm.exceptions.ttypes import PluginException, ErrorType
 from qat.comm.datamodel.ttypes import Op
+from qat.core.plugins import AbstractPlugin
+from qat.core.util import extract_syntax
 from qat.core import Batch
 from qat.core import Result, BatchResult
 from qat.core.wrappers.result import Sample
@@ -25,7 +26,8 @@ def make_pauli_op(pauli_string, qbits):
     
 
 class DepolarizingPlugin(AbstractPlugin):
-    def __init__(self, prob_1qb=0.0, prob_2qb=0.0, n_samples=1000, seed=1425):
+    def __init__(self, prob_1qb=0.0, prob_2qb=0.0, n_samples=1000,
+                 seed=1425, verbose=False):
         """
         Args:
             prob_1qb (float, optional): 1-qbit depolarizing probability.
@@ -36,12 +38,15 @@ class DepolarizingPlugin(AbstractPlugin):
                 Defaults to 1000.
             seed (int, optional): seed for random number generator.
                 Defaults to 1425.
+            verbose (bool, optional): for verbose output. Defaults to False.
         """
         self.prob_1qb = prob_1qb
         self.prob_2qb = prob_2qb
         self.n_samples = n_samples
         self.seed = seed
+        self.verbose = verbose
         self.nbshots = None
+        self.nbqbits = None
         
     def compile(self, batch, harware_specs):
         if len(batch.jobs) != 1:
@@ -50,12 +55,11 @@ class DepolarizingPlugin(AbstractPlugin):
                                   ", got %s instead"%len(batch.jobs))
         job = batch.jobs[0]
         self.nbshots = job.nbshots
-        self.nbqbits = job.circuit.nbqbits
+        self.nbqbits = len(job.qubits)
         list_2qb_paulis = ["%s%s"%(p1, p2)
                            for p1, p2 in product(["I", "X", "Y", "Z"],
                                                  repeat=2) 
                             if p1 != 'I' or p2 !='I']
-        print(len(list_2qb_paulis))
         
         new_batch = []
         for _ in range(self.n_samples):
@@ -69,9 +73,12 @@ class DepolarizingPlugin(AbstractPlugin):
                                           message="This plugin supports operators of type GATETYPE,"
                                                   " got %s instead"%op.type)
                 if len(op.qbits) > 2:
-                    raise PluginException(code=ErrorType.NBQBITS,
-                                          message="This plugin supports only 1 and 2-qbit gates,"
-                                                  " got a gate acting on qbits %s instead"%op.qbits)
+                    gdef = job_copy.circuit.gateDic[op.gate]
+                    gname = extract_syntax(gdef, job_copy.circuit.gateDic)[0]
+                    if gname != "STATE_PREPARATION":
+                        raise PluginException(code=ErrorType.NBQBITS,
+                                              message="This plugin supports only 1 and 2-qbit gates,"
+                                                      " got a gate acting on qbits %s instead"%op.qbits)
                     
                 job_copy.circuit.ops.append(op)
                 if len(op.qbits) == 1:
@@ -90,19 +97,19 @@ class DepolarizingPlugin(AbstractPlugin):
     def post_process(self, batch_result):
         final_distrib = None
         for result in batch_result.results:
-            statevector = np.zeros(2**self.nbqbits, np.complex_)
+            probs = np.zeros(2**self.nbqbits)
             for sample in result:
-                statevector[sample.state.int] = sample.amplitude
+                probs[sample.state.int] = sample.probability
                 
             if final_distrib is None:
-                # final_distrib = abs(result.statevector)**2
-                final_distrib = abs(statevector)**2
+                final_distrib = probs
             else:
-                # final_distrib += abs(result.statevector)**2
-                final_distrib += abs(statevector)**2
+                final_distrib += probs
         final_distrib /= len(batch_result.results)
        
-        print("norm final distrib=", np.sum(final_distrib))
+        if self.verbose:
+            print("norm final distrib=", np.sum(final_distrib))
+
         if self.nbshots == 0:
             res = Result()
             # res.has_statevector = True
