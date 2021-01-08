@@ -1,0 +1,120 @@
+import random
+import numpy as np
+from itertools import product
+from copy import deepcopy
+
+from qat.core.plugins import AbstractPlugin
+from qat.comm.datamodel.ttypes import OpType
+from qat.comm.exceptions.ttypes import PluginException, ErrorType
+from qat.comm.datamodel.ttypes import Op
+from qat.core import Batch
+from qat.core import Result, BatchResult
+from qat.core.wrappers.result import Sample
+
+def make_pauli_op(pauli_string, qbits):
+    """
+    Args:
+        pauli_string (str): Pauli string PP..P with P = I, X, Y, Z.
+    """
+    assert (len(pauli_string)==len(qbits))
+    pauli_op = Op(gate=pauli_string,
+                  qbits=qbits,
+                  type=OpType.GATETYPE)
+    return pauli_op
+
+    
+
+class DepolarizingPlugin(AbstractPlugin):
+    def __init__(self, prob_1qb=0.0, prob_2qb=0.0, n_samples=1000, seed=1425):
+        """
+        Args:
+            prob_1qb (float, optional): 1-qbit depolarizing probability.
+                Defaults to 0.0.
+            prob_2qb (float, optional): 2-qbit depolarizing probability.
+                Defaults to 0.0.
+            n_samples (int, optional): number of stochastic samples.
+                Defaults to 1000.
+            seed (int, optional): seed for random number generator.
+                Defaults to 1425.
+        """
+        self.prob_1qb = prob_1qb
+        self.prob_2qb = prob_2qb
+        self.n_samples = n_samples
+        self.seed = seed
+        self.nbshots = None
+        
+    def compile(self, batch, harware_specs):
+        if len(batch.jobs) != 1:
+            raise PluginException(code=ErrorType.INVALID_ARGS,
+                                  message="This plugin supports only single jobs"
+                                  ", got %s instead"%len(batch.jobs))
+        job = batch.jobs[0]
+        self.nbshots = job.nbshots
+        self.nbqbits = job.circuit.nbqbits
+        list_2qb_paulis = ["%s%s"%(p1, p2)
+                           for p1, p2 in product(["I", "X", "Y", "Z"],
+                                                 repeat=2) 
+                            if p1 != 'I' or p2 !='I']
+        print(len(list_2qb_paulis))
+        
+        new_batch = []
+        for _ in range(self.n_samples):
+            job_copy = deepcopy(job)
+            job_copy.nbshots = 0
+            job_copy.circuit.ops = []
+            for op in job.circuit:
+            
+                if op.type != OpType.GATETYPE:
+                    raise PluginException(code=ErrorType.ILLEGAL_GATES,
+                                          message="This plugin supports operators of type GATETYPE,"
+                                                  " got %s instead"%op.type)
+                if len(op.qbits) > 2:
+                    raise PluginException(code=ErrorType.NBQBITS,
+                                          message="This plugin supports only 1 and 2-qbit gates,"
+                                                  " got a gate acting on qbits %s instead"%op.qbits)
+                    
+                job_copy.circuit.ops.append(op)
+                if len(op.qbits) == 1:
+                    if random.random() < self.prob_1qb:
+                        job_copy.circuit.ops.append(make_pauli_op(random.choice(["X", "Y", "Z"]),
+                                                                  op.qbits))
+                if len(op.qbits) == 2:
+                    if random.random() < self.prob_2qb:
+                        noise_gate = random.choice(list_2qb_paulis)
+                        for gate, qb in zip(noise_gate, op.qbits):
+                            if gate != "I":
+                                job_copy.circuit.ops.append(make_pauli_op(gate, [qb]))
+            new_batch.append(job_copy)
+        return Batch(new_batch)
+    
+    def post_process(self, batch_result):
+        final_distrib = None
+        for result in batch_result.results:
+            statevector = np.zeros(2**self.nbqbits, np.complex_)
+            for sample in result:
+                statevector[sample.state.int] = sample.amplitude
+                
+            if final_distrib is None:
+                # final_distrib = abs(result.statevector)**2
+                final_distrib = abs(statevector)**2
+            else:
+                # final_distrib += abs(result.statevector)**2
+                final_distrib += abs(statevector)**2
+        final_distrib /= len(batch_result.results)
+       
+        print("norm final distrib=", np.sum(final_distrib))
+        if self.nbshots == 0:
+            res = Result()
+            # res.has_statevector = True
+            # res.statevector = final_distrib
+            res.raw_data = []
+            for int_state, val in enumerate(final_distrib):
+                #print(int_state, val)
+                sample = Sample(state=int_state,
+                                probability=val)
+                res.raw_data.append(sample)
+            
+            #print("res=", res)
+            return BatchResult(results=[res])
+        
+        raise Exception("nbshots > 0 not yet implemented")
