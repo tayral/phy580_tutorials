@@ -26,20 +26,30 @@ def make_pauli_op(pauli_string, qbits):
     
 
 class DepolarizingPlugin(AbstractPlugin):
+    r"""
+    When used to build a stack with a perfect QPU, it is equivalent to a noisy QPU with a depolarizing noise model.
+
+    Here, we define the depolarizing noise model by its action on the density matrix:
+    .. math::
+        \mathcal{E}(\rho) = (1 - p) \rho + \frac{p}{4^{n_\mathrm{qbits}}-1}\sum_{k = 1}^{4^{n_\mathrm{qbits}}} P_k \rho P_k
+
+    where :math:`\lbrace P_k, k = 0 \dots 4^{n_\mathrm{qbits}} \rbrace` denotes
+    the set of all products of Pauli matrices (including the identity) for
+    :math:`n_\mathrm{qubits}` qubits. By convention, :math:`P_0 = I_{2^{n_\mathrm{qbits}}}`.
+
+    Args:
+        prob_1qb (float, optional): 1-qbit depolarizing probability.
+            Defaults to 0.0.
+        prob_2qb (float, optional): 2-qbit depolarizing probability.
+            Defaults to 0.0.
+        n_samples (int, optional): number of stochastic samples.
+            Defaults to 1000.
+        seed (int, optional): seed for random number generator.
+            Defaults to 1425.
+        verbose (bool, optional): for verbose output. Defaults to False.
+    """
     def __init__(self, prob_1qb=0.0, prob_2qb=0.0, n_samples=1000,
                  seed=1425, verbose=False):
-        """
-        Args:
-            prob_1qb (float, optional): 1-qbit depolarizing probability.
-                Defaults to 0.0.
-            prob_2qb (float, optional): 2-qbit depolarizing probability.
-                Defaults to 0.0.
-            n_samples (int, optional): number of stochastic samples.
-                Defaults to 1000.
-            seed (int, optional): seed for random number generator.
-                Defaults to 1425.
-            verbose (bool, optional): for verbose output. Defaults to False.
-        """
         self.prob_1qb = prob_1qb
         self.prob_2qb = prob_2qb
         self.n_samples = n_samples
@@ -116,12 +126,10 @@ class DepolarizingPlugin(AbstractPlugin):
             # res.statevector = final_distrib
             res.raw_data = []
             for int_state, val in enumerate(final_distrib):
-                #print(int_state, val)
                 sample = Sample(state=int_state,
                                 probability=val)
                 res.raw_data.append(sample)
             
-            #print("res=", res)
             return BatchResult(results=[res])
         
         raise Exception("nbshots > 0 not yet implemented")
