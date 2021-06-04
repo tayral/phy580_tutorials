@@ -5,6 +5,7 @@ from copy import deepcopy
 
 from qat.comm.datamodel.ttypes import OpType
 from qat.comm.exceptions.ttypes import PluginException, ErrorType
+from qat.comm.shared.ttypes import ProcessingType
 from qat.comm.datamodel.ttypes import Op
 from qat.core.plugins import AbstractPlugin
 from qat.core.util import extract_syntax
@@ -57,6 +58,7 @@ class DepolarizingPlugin(AbstractPlugin):
         self.verbose = verbose
         self.nbshots = None
         self.nbqbits = None
+        self.job_type = None
         
     def compile(self, batch, harware_specs):
         if len(batch.jobs) != 1:
@@ -66,6 +68,7 @@ class DepolarizingPlugin(AbstractPlugin):
         job = batch.jobs[0]
         self.nbshots = job.nbshots
         self.nbqbits = len(job.qubits)
+        self.job_type = job.type
         list_2qb_paulis = ["%s%s"%(p1, p2)
                            for p1, p2 in product(["I", "X", "Y", "Z"],
                                                  repeat=2) 
@@ -105,31 +108,46 @@ class DepolarizingPlugin(AbstractPlugin):
         return Batch(new_batch)
     
     def post_process(self, batch_result):
-        final_distrib = None
-        for result in batch_result.results:
-            probs = np.zeros(2**self.nbqbits)
-            for sample in result:
-                probs[sample.state.int] = sample.probability
-                
-            if final_distrib is None:
-                final_distrib = probs
-            else:
-                final_distrib += probs
-        final_distrib /= len(batch_result.results)
-       
-        if self.verbose:
-            print("norm final distrib=", np.sum(final_distrib))
+        if self.job_type == ProcessingType.SAMPLE:
+            final_distrib = None
+            for result in batch_result.results:
+                probs = np.zeros(2**self.nbqbits)
+                for sample in result:
+                    probs[sample.state.int] = sample.probability
+                    
+                if final_distrib is None:
+                    final_distrib = probs
+                else:
+                    final_distrib += probs
+            final_distrib /= len(batch_result.results)
+           
+            if self.verbose:
+                print("norm final distrib=", np.sum(final_distrib))
 
-        if self.nbshots == 0:
-            res = Result()
-            # res.has_statevector = True
-            # res.statevector = final_distrib
-            res.raw_data = []
-            for int_state, val in enumerate(final_distrib):
-                sample = Sample(state=int_state,
-                                probability=val)
-                res.raw_data.append(sample)
-            
+            if self.nbshots == 0:
+                res = Result()
+                # res.has_statevector = True
+                # res.statevector = final_distrib
+                res.raw_data = []
+                for int_state, val in enumerate(final_distrib):
+                    sample = Sample(state=int_state,
+                                    probability=val)
+                    res.raw_data.append(sample)
+                
+                return BatchResult(results=[res])
+            raise Exception("nbshots > 0 not yet implemented")
+
+        elif self.job_type == ProcessingType.OBSERVABLE:
+            vals = []
+            for result in batch_result.results:
+                if self.verbose:
+                    print("result=", result)
+                vals.append(result.value)
+            val = np.mean(vals)
+            err = np.std(vals)/np.sqrt(len(vals)-1)
+            res = Result(value=val, error=err)
             return BatchResult(results=[res])
+
+        else:
+            raise Exception("Unknown job type")
         
-        raise Exception("nbshots > 0 not yet implemented")
